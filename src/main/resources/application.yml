@@ -1,0 +1,43 @@
+app:
+  base-url: ${APP_BASE_URL:http://localhost:3000}
+
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/knowledge_graph?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=UTF-8
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:yuhuang11}    # ← 把"你的MySQL密码"替换成实际密码
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+server:
+  port: 8080
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:knowledge-graph-jwt-secret-key-must-be-at-least-256-bits-long-for-hs256}
+    expiration: 86400000   # 24 小时（毫秒）
+
+ai:
+  api:
+    base-url: https://api.scnet.cn/api/llm/v1
+    key: ${AI_API_KEY:sk-MzIxLTIxMjM3ODM2MTUwLTE3NzUwMzc4NTgzNDQ=}
+    chat-model: ${AI_CHAT_MODEL:MiniMax-M2.5}
+    embedding-model: Qwen3-Embedding-8B
+    # 单次送入 AI 的最大字符数（超长文档会分块处理）
+    chunk-size: 4000
+
+logging:
+  level:
+    com.knowledge: INFO
+    org.springframework.security: WARN

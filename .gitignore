@@ -1,0 +1,10 @@
+target/
+.mvn/
+*.class
+*.jar
+*.war
+*.ear
+.DS_Store
+*.log
+.env
+application-local.yml
