@@ -14,13 +14,24 @@ RUN mvn package -DskipTests -q
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
+# 安装 netcat，用于等待 MySQL 就绪
+RUN apk add --no-cache netcat-openbsd
+
 COPY --from=build /app/target/*.jar app.jar
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", \
-  "-Xms128m", "-Xmx350m", \
-  "-XX:MaxMetaspaceSize=128m", \
-  "-XX:+UseContainerSupport", \
-  "-XX:+UseG1GC", \
-  "-jar", "app.jar"]
+# 等待 MySQL 端口开放后再启动 Java（MYSQLHOST/MYSQLPORT 由 Railway 自动注入）
+ENTRYPOINT ["sh", "-c", "\
+  echo 'Waiting for MySQL...' && \
+  until nc -z -w3 ${MYSQLHOST:-mysql.railway.internal} ${MYSQLPORT:-3306} 2>/dev/null; do \
+    echo 'MySQL not ready, retry in 3s...'; \
+    sleep 3; \
+  done && \
+  echo 'MySQL is ready, starting app...' && \
+  exec java \
+    -Xms128m -Xmx350m \
+    -XX:MaxMetaspaceSize=128m \
+    -XX:+UseContainerSupport \
+    -XX:+UseG1GC \
+    -jar app.jar"]
