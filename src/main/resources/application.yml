@@ -14,7 +14,7 @@ spring:
       maximum-pool-size: 5
       minimum-idle: 2
       connection-timeout: 30000
-      initialization-fail-timeout: 60000
+      initialization-fail-timeout: -1
       connection-test-query: SELECT 1
   jpa:
     hibernate:
