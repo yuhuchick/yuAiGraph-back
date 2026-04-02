@@ -10,6 +10,9 @@ spring:
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:yuhuang11}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 2
   jpa:
     hibernate:
       ddl-auto: update
