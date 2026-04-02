@@ -1,5 +1,8 @@
 app:
   base-url: ${APP_BASE_URL:http://localhost:3000}
+  jwt:
+    secret: ${JWT_SECRET:knowledge-graph-jwt-secret-key-must-be-at-least-256-bits-long-for-hs256}
+    expiration: 86400000   # 24 小时（毫秒）
 
 spring:
   datasource:
@@ -22,11 +25,6 @@ spring:
 
 server:
   port: 8080
-
-app:
-  jwt:
-    secret: ${JWT_SECRET:knowledge-graph-jwt-secret-key-must-be-at-least-256-bits-long-for-hs256}
-    expiration: 86400000   # 24 小时（毫秒）
 
 ai:
   api:
