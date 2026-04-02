@@ -28,6 +28,11 @@ spring:
 
 server:
   port: ${PORT:8080}
+  tomcat:
+    connection-timeout: 20s
+    threads:
+      max: 50
+      min-spare: 5
 
 ai:
   api:
