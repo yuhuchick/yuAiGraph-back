@@ -6,13 +6,16 @@ app:
 
 spring:
   datasource:
-    url: ${DB_URL:jdbc:mysql://localhost:3306/knowledge_graph?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=UTF-8}
+    url: ${DB_URL:jdbc:mysql://localhost:3306/knowledge_graph?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&createDatabaseIfNotExist=true}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:yuhuang11}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 5
       minimum-idle: 2
+      connection-timeout: 30000
+      initialization-fail-timeout: 60000
+      connection-test-query: SELECT 1
   jpa:
     hibernate:
       ddl-auto: update
@@ -47,3 +50,5 @@ logging:
   level:
     com.knowledge: INFO
     org.springframework.security: WARN
+    com.zaxxer.hikari: INFO
+    org.hibernate.SQL: DEBUG
