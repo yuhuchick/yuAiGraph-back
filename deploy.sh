@@ -4,8 +4,8 @@
 set -e
 
 ENV_FILE="/opt/deploy/deploy.env"
-APP_DIR="/opt/ai-back"
-LOG_DIR="/var/log/ai-back"
+APP_DIR="/opt/yuAiGraph-back"
+LOG_DIR="/var/log/yuAiGraph-back"
 REPO_DIR="$APP_DIR/repo"
 
 # ── 检查配置文件 ───────────────────────────────────────────────
@@ -62,7 +62,7 @@ AI_CHAT_MODEL=${AI_CHAT_MODEL}
 BACKENV
 
 # ── 注册 systemd 服务 ──────────────────────────────────────────
-cat > /etc/systemd/system/ai-back.service << SVCEOF
+cat > /etc/systemd/system/yuAiGraph-back.service << SVCEOF
 [Unit]
 Description=AI Knowledge Graph Backend
 After=network.target mysqld.service mariadb.service
@@ -83,16 +83,16 @@ SVCEOF
 
 # ── 重启服务 ───────────────────────────────────────────────────
 systemctl daemon-reload
-systemctl enable ai-back
-systemctl restart ai-back
+systemctl enable yuAiGraph-back
+systemctl restart yuAiGraph-back
 
 echo "【后端】等待启动..."
 sleep 6
-if systemctl is-active --quiet ai-back; then
+if systemctl is-active --quiet yuAiGraph-back; then
     echo "【后端】✅ 启动成功"
     echo "        日志: tail -f $LOG_DIR/app.log"
 else
     echo "【后端】❌ 启动失败，最近日志："
-    journalctl -u ai-back -n 30 --no-pager
+    journalctl -u yuAiGraph-back -n 30 --no-pager
     exit 1
 fi
