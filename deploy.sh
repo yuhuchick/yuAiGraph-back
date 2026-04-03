@@ -52,13 +52,13 @@ echo "【后端】打包完成：$(ls -lh $APP_DIR/app.jar | awk '{print $5}')"
 
 # ── 写入环境变量 ───────────────────────────────────────────────
 cat > "$APP_DIR/.env" << BACKENV
-DB_URL=${DB_URL}
-DB_USERNAME=${DB_USERNAME}
-DB_PASSWORD=${DB_PASSWORD}
-JWT_SECRET=${JWT_SECRET}
-APP_BASE_URL=${APP_BASE_URL}
-AI_API_KEY=${AI_API_KEY}
-AI_CHAT_MODEL=${AI_CHAT_MODEL}
+DB_URL="${DB_URL}"
+DB_USERNAME="${DB_USERNAME}"
+DB_PASSWORD="${DB_PASSWORD}"
+JWT_SECRET="${JWT_SECRET}"
+APP_BASE_URL="${APP_BASE_URL}"
+AI_API_KEY="${AI_API_KEY}"
+AI_CHAT_MODEL="${AI_CHAT_MODEL}"
 BACKENV
 
 # ── 注册 systemd 服务 ──────────────────────────────────────────
