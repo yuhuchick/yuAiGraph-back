@@ -10,4 +10,6 @@ public class NoteItem {
     private String name;
     private String createdAt;
     private int nodeCount;
+    /** 分类，空表示其他 */
+    private String category;
 }

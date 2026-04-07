@@ -2,7 +2,7 @@ package com.knowledge.controller;
 
 import com.knowledge.common.Result;
 import com.knowledge.dto.GraphData;
-import com.knowledge.dto.NoteItem;
+import com.knowledge.dto.NoteListResponse;
 import com.knowledge.service.NoteService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -20,11 +20,23 @@ public class NoteController {
     private final NoteService noteService;
 
     @GetMapping("/notes")
-    public ResponseEntity<Result<List<NoteItem>>> listNotes(
+    public ResponseEntity<Result<NoteListResponse>> listNotes(
+        @AuthenticationPrincipal UserDetails userDetails,
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue = "10") int size,
+        @RequestParam(required = false) String category,
+        @RequestParam(required = false) String keyword
+    ) {
+        Long userId = Long.valueOf(userDetails.getUsername());
+        return ResponseEntity.ok(Result.ok(noteService.listNotesPage(userId, page, size, category, keyword)));
+    }
+
+    @GetMapping("/note-categories")
+    public ResponseEntity<Result<List<String>>> listNoteCategories(
         @AuthenticationPrincipal UserDetails userDetails
     ) {
         Long userId = Long.valueOf(userDetails.getUsername());
-        return ResponseEntity.ok(Result.ok(noteService.listNotes(userId)));
+        return ResponseEntity.ok(Result.ok(noteService.listDistinctCategories(userId)));
     }
 
     @DeleteMapping("/notes/{noteId}")

@@ -45,6 +45,14 @@ ai:
     embedding-model: Qwen3-Embedding-8B
     # 单次送入 AI 的最大字符数（超长文档会分块处理）
     chunk-size: 4000
+    # 调用上游 LLM 的 HTTP 超时（流式问答易触发读/整体响应超时，可按环境调大）
+    http:
+      connect-timeout-ms: 10000
+      # 相邻两次从上游读到数据的最大间隔（SSE 两包之间无数据超过此时长会断）
+      read-idle-seconds: 600
+      write-timeout-seconds: 120
+      # 从发起到响应流结束的整体上限（含长回答整段生成时间）
+      response-timeout-seconds: 1800
 
 logging:
   level:

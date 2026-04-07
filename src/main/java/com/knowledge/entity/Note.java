@@ -25,6 +25,10 @@ public class Note {
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    /** 用户自定义分类，空字符串表示其他 */
+    @Column(length = 64)
+    private String category = "";
+
     /** AI 生成的多视角图表 JSON 数组（InsightChartSpecDto[]） */
     @Column(name = "insights_json", columnDefinition = "LONGTEXT")
     private String insightsJson;

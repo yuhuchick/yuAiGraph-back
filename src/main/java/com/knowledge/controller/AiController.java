@@ -31,11 +31,25 @@ public class AiController {
     public ResponseEntity<Result<Map<String, String>>> parseDocument(
         @RequestParam("file") MultipartFile file,
         @RequestParam("noteName") String noteName,
+        @RequestParam(value = "category", required = false) String category,
         @AuthenticationPrincipal UserDetails userDetails
     ) {
         Long userId = Long.valueOf(userDetails.getUsername());
-        String jobId = aiService.startParseJob(file, noteName, userId);
+        String jobId = aiService.startParseJob(file, noteName, userId, category);
         return ResponseEntity.ok(Result.ok(Map.of("jobId", jobId)));
+    }
+
+    /**
+     * 中止进行中的解析任务（已结束的任务不可取消）
+     */
+    @PostMapping("/parse-cancel/{jobId}")
+    public ResponseEntity<Result<Void>> cancelParseJob(
+        @PathVariable String jobId,
+        @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        Long userId = Long.valueOf(userDetails.getUsername());
+        aiService.cancelParseJob(jobId, userId);
+        return ResponseEntity.ok(Result.ok());
     }
 
     /**

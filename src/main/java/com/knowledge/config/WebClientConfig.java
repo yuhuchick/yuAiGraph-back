@@ -22,16 +22,28 @@ public class WebClientConfig {
     @Value("${ai.api.key}")
     private String aiApiKey;
 
+    @Value("${ai.api.http.connect-timeout-ms:10000}")
+    private int connectTimeoutMs;
+
+    @Value("${ai.api.http.read-idle-seconds:600}")
+    private int readIdleSeconds;
+
+    @Value("${ai.api.http.write-timeout-seconds:120}")
+    private int writeTimeoutSeconds;
+
+    @Value("${ai.api.http.response-timeout-seconds:1800}")
+    private int responseTimeoutSeconds;
+
     @Bean("aiWebClient")
     public WebClient aiWebClient() {
         HttpClient httpClient = HttpClient.create()
-            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10_000)
+            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)
             // TCP_NODELAY=true 禁用 Nagle 算法，每个 token 立即写出不等待凑包
             .option(ChannelOption.TCP_NODELAY, true)
-            .responseTimeout(Duration.ofMinutes(5))
+            .responseTimeout(Duration.ofSeconds(responseTimeoutSeconds))
             .doOnConnected(conn -> conn
-                .addHandlerLast(new ReadTimeoutHandler(300, TimeUnit.SECONDS))
-                .addHandlerLast(new WriteTimeoutHandler(30, TimeUnit.SECONDS)));
+                .addHandlerLast(new ReadTimeoutHandler(readIdleSeconds, TimeUnit.SECONDS))
+                .addHandlerLast(new WriteTimeoutHandler(writeTimeoutSeconds, TimeUnit.SECONDS)));
 
         return WebClient.builder()
             .baseUrl(aiApiBaseUrl)

@@ -25,7 +25,11 @@ public class ParseJob {
     @Column(name = "note_name", nullable = false, length = 200)
     private String noteName;
 
-    /** PENDING | PROCESSING | DONE | FAILED */
+    /** 解析完成后写入笔记的分类（可选） */
+    @Column(name = "note_category", length = 64)
+    private String noteCategory = "";
+
+    /** PENDING | PROCESSING | DONE | FAILED | CANCELLED */
     @Column(nullable = false, length = 20)
     private String status = "PENDING";
 

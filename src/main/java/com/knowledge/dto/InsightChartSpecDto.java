@@ -18,7 +18,7 @@ public class InsightChartSpecDto {
     /** 为何选用该图类型、对应文档中哪类信息 */
     private String rationale;
     /**
-     * pie | bar | line | radar | scatter
+     * pie | bar | line | radar | scatter | table
      * 由模型按内容语义选择，勿滥用；无合适数据时不要生成该项。
      */
     private String chartType;
@@ -30,4 +30,8 @@ public class InsightChartSpecDto {
      * 仅 chartType=scatter 时使用：[[x1,y1],[x2,y2],...]，与 categories 二选一为主数据
      */
     private List<List<Double>> scatterPoints;
+    /** chartType=table 时：表头 */
+    private List<String> tableColumns;
+    /** chartType=table 时：数据行，每行单元格与 tableColumns 等长 */
+    private List<List<String>> tableRows;
 }

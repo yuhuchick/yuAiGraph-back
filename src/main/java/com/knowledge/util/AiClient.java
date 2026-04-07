@@ -3,6 +3,7 @@ package com.knowledge.util;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.knowledge.dto.GraphData;
+import com.knowledge.exception.ParseCancelledException;
 import com.knowledge.dto.GraphLinkDto;
 import com.knowledge.dto.GraphNodeDto;
 import com.knowledge.dto.InsightChartSpecDto;
@@ -21,6 +22,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -54,19 +56,21 @@ public class AiClient {
         4. 图谱与图表中的数值必须能在原文中找到依据；禁止编造与原文无关的数据。
 
         【语义图表 insightCharts】
-        5. 根据段落内容选择不同 chartType，使「一类信息对应一种合适的图」：
-           - 占比、构成、份额 → pie
-           - 类别数量对比、排名 → bar
-           - 时间序列、阶段变化、趋势 → line
-           - 多维度能力/特征对比 → radar
-           - 两变量关系、分布点 → scatter（用 scatterPoints，不用 categories+series）
-        6. 每一项含：id（本块内唯一，如 c1、c2）、title、rationale（1句：为何选该图、对应文中哪类信息）、chartType（仅允许 pie|bar|line|radar|scatter）、categories（类目名数组，与数值一一对应；scatter 可省略或为空数组）、series（数组，每项 name + data 为与 categories 等长的数值数组；可多系列用于分组柱状/多折线）、scatter 时 scatterPoints 为 [[x,y],...]。
-        7. 若本段没有可量化的对比/趋势/占比等，insightCharts 输出空数组 []。不要为了凑数重复建图。
+        5. 优先产出能反映文档论点、阶段对比、时间线、TOP 清单、术语与人物要点等「有叙事价值」的图或表；禁止仅为「节点类型占比、关系标签出现次数、节点连接度」等纯图谱结构统计单独建图（系统会以表格展示实体与关系清单）。
+        6. chartType 取值：
+           - pie：文中明确的占比、构成、份额
+           - bar：类别数量对比、排名、多组对比
+           - line：时间序列、阶段变化、趋势
+           - radar：多维度特征/能力对比
+           - scatter：两变量关系，使用 scatterPoints 为 [[x,y],...]，不用 categories+series 承载主数据
+           - table：术语定义表、阶段对照、人物/事件要点罗列、论点与论据清单等；必须提供 tableColumns（表头字符串数组）与 tableRows（二维数组，每行长度与表头列数一致）；table 时可省略或留空 categories、series、scatterPoints
+        7. 每一项含：id（本块内唯一，如 c1）、title、rationale（1句说明对应文中哪类信息）、chartType 及对应数据字段。
+        8. 若本段没有值得单独成图/表的内容，insightCharts 输出 []；禁止为用图谱结构统计凑数。
 
         输出唯一一个 JSON 对象，键为 nodes、links、insightCharts，不要 markdown 或任何额外文字。
 
         输出格式示例（字段说明用，勿照抄数值）：
-        {"nodes":[...],"links":[...],"insightCharts":[{"id":"c1","title":"...","rationale":"...","chartType":"bar","categories":["A","B"],"series":[{"name":"数量","data":[1,2]}]}]}
+        {"nodes":[...],"links":[...],"insightCharts":[{"id":"c1","title":"...","rationale":"...","chartType":"bar","categories":["A","B"],"series":[{"name":"数量","data":[1,2]}]},{"id":"c2","title":"术语表","rationale":"...","chartType":"table","tableColumns":["术语","含义"],"tableRows":[["A","定义A"],["B","定义B"]]}]}
 
         文本内容：\
         """;
@@ -78,6 +82,13 @@ public class AiClient {
      * 从文本中提取实体和关系，超长文本自动分块处理并合并结果
      */
     public GraphData extractGraphData(String text) {
+        return extractGraphData(text, () -> false);
+    }
+
+    /**
+     * @param cancelled 在每一块调用 AI 之前检查；返回 true 时中止并抛出 {@link ParseCancelledException}
+     */
+    public GraphData extractGraphData(String text, BooleanSupplier cancelled) {
         List<String> chunks = splitText(text).stream()
             .filter(c -> c.length() >= MIN_CHUNK_LENGTH)
             .toList();
@@ -94,6 +105,9 @@ public class AiClient {
         int nodeIdOffset = 0;
 
         for (int i = 0; i < chunks.size(); i++) {
+            if (cancelled.getAsBoolean()) {
+                throw new ParseCancelledException();
+            }
             String chunk = chunks.get(i);
             log.info("正在处理第 {}/{} 块，长度: {} 字符", i + 1, chunks.size(), chunk.length());
             try {
@@ -112,6 +126,9 @@ public class AiClient {
             }
         }
 
+        if (cancelled.getAsBoolean()) {
+            throw new ParseCancelledException();
+        }
         deduplicateNodes(allNodes);
         assignUniqueInsightChartIds(allInsightCharts);
         return new GraphData(allNodes, allLinks, allInsightCharts);
@@ -370,15 +387,70 @@ public class AiClient {
         if (id.isEmpty() || title.isEmpty()) {
             return null;
         }
+        String chartType = textField(el, "chartType").toLowerCase(Locale.ROOT);
+        if (chartType.isEmpty()) {
+            return null;
+        }
+        List<String> categories = parseStringList(el.get("categories"));
+        List<InsightSeriesDto> series = parseSeriesList(el.get("series"));
+        List<List<Double>> scatterPoints = parseScatterPoints(el.get("scatterPoints"));
+        List<String> tableColumns = parseStringList(el.get("tableColumns"));
+        List<List<String>> tableRows = parseStringTableRows(el.get("tableRows"));
+
+        if ("table".equals(chartType)) {
+            if (tableColumns.isEmpty() || tableRows.isEmpty()) {
+                return null;
+            }
+            return new InsightChartSpecDto(
+                id,
+                title,
+                textField(el, "rationale"),
+                chartType,
+                categories,
+                series,
+                scatterPoints,
+                tableColumns,
+                tableRows
+            );
+        }
+
         return new InsightChartSpecDto(
             id,
             title,
             textField(el, "rationale"),
-            textField(el, "chartType"),
-            parseStringList(el.get("categories")),
-            parseSeriesList(el.get("series")),
-            parseScatterPoints(el.get("scatterPoints"))
+            chartType,
+            categories,
+            series,
+            scatterPoints,
+            Collections.emptyList(),
+            Collections.emptyList()
         );
+    }
+
+    private List<List<String>> parseStringTableRows(JsonNode arr) {
+        if (arr == null || !arr.isArray()) {
+            return Collections.emptyList();
+        }
+        List<List<String>> out = new ArrayList<>();
+        for (JsonNode row : arr) {
+            if (!row.isArray()) {
+                continue;
+            }
+            List<String> cells = new ArrayList<>();
+            for (JsonNode cell : row) {
+                if (cell.isTextual()) {
+                    cells.add(cell.asText());
+                } else if (cell.isNumber() || cell.isBoolean()) {
+                    cells.add(cell.asText());
+                } else {
+                    cells.add("");
+                }
+            }
+            if (!cells.isEmpty()) {
+                out.add(cells);
+            }
+        }
+        return out;
     }
 
     private List<String> parseStringList(JsonNode arr) {

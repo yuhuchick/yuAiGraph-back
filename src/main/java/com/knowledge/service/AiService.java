@@ -4,6 +4,7 @@ import com.knowledge.dto.GraphData;
 import com.knowledge.dto.ParseJobStatusDto;
 import com.knowledge.entity.ParseJob;
 import com.knowledge.exception.BusinessException;
+import com.knowledge.exception.ParseCancelledException;
 import com.knowledge.repository.GraphNodeRepository;
 import com.knowledge.repository.NoteRepository;
 import com.knowledge.repository.ParseJobRepository;
@@ -50,8 +51,10 @@ public class AiService {
 
     /**
      * 立即返回 jobId，后台异步执行解析
+     *
+     * @param noteCategory 保存到笔记的分类，可为空
      */
-    public String startParseJob(MultipartFile file, String noteName, Long userId) {
+    public String startParseJob(MultipartFile file, String noteName, Long userId, String noteCategory) {
         if (file.isEmpty()) throw BusinessException.badRequest("文件不能为空");
         if (file.getSize() > 100L * 1024 * 1024) throw BusinessException.badRequest("文件超过 100MB 限制");
 
@@ -71,6 +74,7 @@ public class AiService {
         job.setUserId(userId);
         job.setFileName(fileName);
         job.setNoteName(noteName);
+        job.setNoteCategory(normalizeNoteCategory(noteCategory));
         job.setStatus("PENDING");
         job.setProgress(0);
         parseJobRepository.save(job);
@@ -83,9 +87,44 @@ public class AiService {
         return jobId;
     }
 
+    @Transactional
+    public void cancelParseJob(String jobId, Long userId) {
+        ParseJob job = parseJobRepository.findByIdAndUserId(jobId, userId)
+            .orElseThrow(() -> BusinessException.notFound("解析任务不存在"));
+        if ("DONE".equals(job.getStatus()) || "FAILED".equals(job.getStatus()) || "CANCELLED".equals(job.getStatus())) {
+            throw BusinessException.badRequest("任务已结束，无法取消");
+        }
+        job.setStatus("CANCELLED");
+        job.setErrorMessage("用户已取消");
+        job.setUpdatedAt(LocalDateTime.now());
+        parseJobRepository.save(job);
+        log.info("用户取消解析任务 jobId={}, userId={}", jobId, userId);
+    }
+
+    private static String normalizeNoteCategory(String c) {
+        if (c == null) {
+            return "";
+        }
+        String t = c.trim();
+        if (t.isEmpty()) {
+            return "";
+        }
+        return t.length() > 64 ? t.substring(0, 64) : t;
+    }
+
+    private boolean isParseJobCancelled(String jobId) {
+        return parseJobRepository.findById(jobId)
+            .map(j -> "CANCELLED".equals(j.getStatus()))
+            .orElse(true);
+    }
+
     private void runParseJob(String jobId, byte[] fileBytes, String contentType,
                              String fileName, String noteName, Long userId) {
         try {
+            if (isParseJobCancelled(jobId)) {
+                log.info("[{}] 任务已取消，跳过执行", jobId);
+                return;
+            }
             updateJob(jobId, "PROCESSING", 10, null, null);
 
             log.info("[{}] 开始提取文本", jobId);
@@ -94,23 +133,42 @@ public class AiService {
                 updateJob(jobId, "FAILED", 0, null, "文件内容为空，无法解析");
                 return;
             }
+            if (isParseJobCancelled(jobId)) {
+                log.info("[{}] 文本提取后检测到取消", jobId);
+                return;
+            }
             updateJob(jobId, "PROCESSING", 25, null, null);
 
             log.info("[{}] 文本提取完成（{}字），开始 AI 分析", jobId, text.length());
-            GraphData graphData = aiClient.extractGraphData(text);
+            ParseJob jobRef = parseJobRepository.findById(jobId).orElse(null);
+            String noteCategory = jobRef != null && jobRef.getNoteCategory() != null ? jobRef.getNoteCategory() : "";
+
+            GraphData graphData = aiClient.extractGraphData(text, () -> isParseJobCancelled(jobId));
 
             if (graphData.getNodes() == null || graphData.getNodes().isEmpty()) {
+                if (isParseJobCancelled(jobId)) {
+                    return;
+                }
                 updateJob(jobId, "FAILED", 0, null, "AI 未能从文件中提取到有效实体，请检查文件内容");
+                return;
+            }
+            if (isParseJobCancelled(jobId)) {
                 return;
             }
             updateJob(jobId, "PROCESSING", 85, null, null);
 
             log.info("[{}] AI 分析完成，节点数={}，开始保存", jobId, graphData.getNodes().size());
-            String noteId = noteService.saveGraph(noteName, userId, graphData);
+            String noteId = noteService.saveGraph(noteName, userId, graphData, noteCategory);
             updateJob(jobId, "DONE", 100, noteId, null);
 
             log.info("[{}] 解析完成，noteId={}", jobId, noteId);
+        } catch (ParseCancelledException e) {
+            log.info("[{}] 解析已由用户取消", jobId);
         } catch (Exception e) {
+            if (isParseJobCancelled(jobId)) {
+                log.info("[{}] 解析过程中任务已取消: {}", jobId, e.getMessage());
+                return;
+            }
             log.error("[{}] 解析失败: {}", jobId, e.getMessage(), e);
             updateJob(jobId, "FAILED", 0, null, e.getMessage());
         }
@@ -165,6 +223,7 @@ public class AiService {
             case "PENDING" -> "等待解析...";
             case "DONE"    -> "解析完成！";
             case "FAILED"  -> "解析失败";
+            case "CANCELLED" -> "已取消";
             default -> {
                 if (progress < 25) yield "提取文档内容...";
                 if (progress < 85) yield "AI 正在分析知识图谱...";

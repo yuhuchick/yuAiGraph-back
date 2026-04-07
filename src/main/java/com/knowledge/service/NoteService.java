@@ -12,13 +12,21 @@ import com.knowledge.entity.GraphLink;
 import com.knowledge.entity.GraphNode;
 import com.knowledge.entity.Note;
 import com.knowledge.exception.BusinessException;
+import com.knowledge.dto.NoteListResponse;
 import com.knowledge.repository.GraphLinkRepository;
 import com.knowledge.repository.GraphNodeRepository;
 import com.knowledge.repository.NoteRepository;
+import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
@@ -37,18 +45,75 @@ public class NoteService {
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
-    public List<NoteItem> listNotes(Long userId) {
-        return noteRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-            .map(note -> {
-                int nodeCount = graphNodeRepository.findByNoteId(note.getId()).size();
-                return new NoteItem(
-                    note.getId(),
-                    note.getName(),
-                    note.getCreatedAt().format(DATE_FMT),
-                    nodeCount
-                );
-            })
+    public NoteListResponse listNotesPage(Long userId, int page, int size, String category, String keyword) {
+        int p = Math.max(0, page);
+        int s = Math.min(50, Math.max(1, size));
+        var pageable = PageRequest.of(p, s, Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        Specification<Note> spec = (root, query, cb) -> {
+            Predicate pred = cb.equal(root.get("userId"), userId);
+            if (StringUtils.hasText(category) && !"__all__".equals(category)) {
+                if ("__none__".equals(category)) {
+                    pred = cb.and(pred, cb.or(
+                        cb.isNull(root.get("category")),
+                        cb.equal(root.get("category"), "")
+                    ));
+                } else {
+                    pred = cb.and(pred, cb.equal(root.get("category"), category.trim()));
+                }
+            }
+            if (StringUtils.hasText(keyword)) {
+                String like = "%" + keyword.trim().toLowerCase() + "%";
+                pred = cb.and(pred, cb.like(cb.lower(root.get("name")), like));
+            }
+            return pred;
+        };
+
+        Page<Note> result = noteRepository.findAll(spec, pageable);
+        List<NoteItem> items = result.getContent().stream()
+            .map(this::toNoteItem)
             .toList();
+
+        LocalDateTime monthStart = LocalDateTime.now()
+            .withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
+
+        return NoteListResponse.builder()
+            .items(items)
+            .total(result.getTotalElements())
+            .page(p)
+            .size(s)
+            .totalPages(result.getTotalPages())
+            .allNotesCount(noteRepository.countByUserId(userId))
+            .totalNodeCount(graphNodeRepository.countNodesForUser(userId))
+            .notesThisMonth(noteRepository.countByUserIdAndCreatedAtGreaterThanEqual(userId, monthStart))
+            .build();
+    }
+
+    public List<String> listDistinctCategories(Long userId) {
+        return noteRepository.findDistinctCategoriesByUserId(userId);
+    }
+
+    private NoteItem toNoteItem(Note note) {
+        int nodeCount = graphNodeRepository.findByNoteId(note.getId()).size();
+        String cat = note.getCategory() != null ? note.getCategory() : "";
+        return new NoteItem(
+            note.getId(),
+            note.getName(),
+            note.getCreatedAt().format(DATE_FMT),
+            nodeCount,
+            cat
+        );
+    }
+
+    private static String normalizeCategory(String c) {
+        if (c == null) {
+            return "";
+        }
+        String t = c.trim();
+        if (t.isEmpty()) {
+            return "";
+        }
+        return t.length() > 64 ? t.substring(0, 64) : t;
     }
 
     @Transactional
@@ -82,12 +147,18 @@ public class NoteService {
 
     @Transactional
     public String saveGraph(String noteName, Long userId, GraphData graphData) {
+        return saveGraph(noteName, userId, graphData, "");
+    }
+
+    @Transactional
+    public String saveGraph(String noteName, Long userId, GraphData graphData, String category) {
         String noteId = java.util.UUID.randomUUID().toString();
 
         Note note = new Note();
         note.setId(noteId);
         note.setName(noteName);
         note.setUserId(userId);
+        note.setCategory(normalizeCategory(category));
         if (graphData.getInsightCharts() != null && !graphData.getInsightCharts().isEmpty()) {
             try {
                 note.setInsightsJson(objectMapper.writeValueAsString(graphData.getInsightCharts()));
