@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.knowledge.dto.GraphData;
 import com.knowledge.dto.GraphLinkDto;
 import com.knowledge.dto.GraphNodeDto;
+import com.knowledge.dto.InsightChartSpecDto;
+import com.knowledge.dto.InsightSeriesDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -42,14 +44,30 @@ public class AiClient {
     private int chunkSize;
 
     private static final String EXTRACT_PROMPT_TEMPLATE = """
-        你是一个知识图谱专家，需要从以下文本中提取实体和关系。要求：
+        你是一个知识图谱与数据可视化专家，需要从以下文本中同时提取：(A) 实体关系图谱，(B) 文档中可结构化展示的重点（多张小图，勿把所有信息塞进一张图）。
+
+        【图谱 nodes / links】
         1. 实体分为4类：概念（concept）、人物（person）、事件（event）、物体（object）
-        2. 每个实体包含：id（如n1/n2...，每次从n1开始）、name、type、description（1-2句话）
-        3. 关系格式：source（源实体id）、target（目标实体id）、relationship（如"包含"/"关联"/"因果"/"属于"）
-        4. 必须输出合法 JSON，不要有任何额外内容或代码块标记
-        
-        输出格式：{"nodes":[{"id":"n1","name":"...","type":"concept","description":"..."}],"links":[{"source":"n1","target":"n2","relationship":"..."}]}
-        
+        2. 每个实体：id（本块内从 n1、n2…连续编号）、name、type、description（1-2句话）
+        2a. nodes、links、insightCharts 均为数组；数组中每一项必须是完整的 JSON 对象（含花括号与键值对），禁止出现纯字符串元素（如 "id"、"name"）或残缺片段，否则无法解析。
+        3. 关系：source、target（均为实体 id）、relationship（如「包含」「关联」「因果」「属于」等简短动词短语）
+        4. 图谱与图表中的数值必须能在原文中找到依据；禁止编造与原文无关的数据。
+
+        【语义图表 insightCharts】
+        5. 根据段落内容选择不同 chartType，使「一类信息对应一种合适的图」：
+           - 占比、构成、份额 → pie
+           - 类别数量对比、排名 → bar
+           - 时间序列、阶段变化、趋势 → line
+           - 多维度能力/特征对比 → radar
+           - 两变量关系、分布点 → scatter（用 scatterPoints，不用 categories+series）
+        6. 每一项含：id（本块内唯一，如 c1、c2）、title、rationale（1句：为何选该图、对应文中哪类信息）、chartType（仅允许 pie|bar|line|radar|scatter）、categories（类目名数组，与数值一一对应；scatter 可省略或为空数组）、series（数组，每项 name + data 为与 categories 等长的数值数组；可多系列用于分组柱状/多折线）、scatter 时 scatterPoints 为 [[x,y],...]。
+        7. 若本段没有可量化的对比/趋势/占比等，insightCharts 输出空数组 []。不要为了凑数重复建图。
+
+        输出唯一一个 JSON 对象，键为 nodes、links、insightCharts，不要 markdown 或任何额外文字。
+
+        输出格式示例（字段说明用，勿照抄数值）：
+        {"nodes":[...],"links":[...],"insightCharts":[{"id":"c1","title":"...","rationale":"...","chartType":"bar","categories":["A","B"],"series":[{"name":"数量","data":[1,2]}]}]}
+
         文本内容：\
         """;
 
@@ -72,6 +90,7 @@ public class AiClient {
 
         List<GraphNodeDto> allNodes = new ArrayList<>();
         List<GraphLinkDto> allLinks = new ArrayList<>();
+        List<InsightChartSpecDto> allInsightCharts = new ArrayList<>();
         int nodeIdOffset = 0;
 
         for (int i = 0; i < chunks.size(); i++) {
@@ -81,6 +100,9 @@ public class AiClient {
                 GraphData chunkResult = extractFromChunk(chunk, nodeIdOffset);
                 allNodes.addAll(chunkResult.getNodes());
                 allLinks.addAll(chunkResult.getLinks());
+                if (chunkResult.getInsightCharts() != null) {
+                    allInsightCharts.addAll(chunkResult.getInsightCharts());
+                }
                 nodeIdOffset += chunkResult.getNodes().size();
             } catch (WebClientResponseException e) {
                 log.error("第 {}/{} 块 API 拒绝请求，状态码: {}，响应体: {}",
@@ -91,7 +113,8 @@ public class AiClient {
         }
 
         deduplicateNodes(allNodes);
-        return new GraphData(allNodes, allLinks);
+        assignUniqueInsightChartIds(allInsightCharts);
+        return new GraphData(allNodes, allLinks, allInsightCharts);
     }
 
     /**
@@ -209,7 +232,7 @@ public class AiClient {
         content = stripThinkingBlock(content);
         String cleanJson = extractJson(content);
 
-        GraphData result = objectMapper.readValue(cleanJson, GraphData.class);
+        GraphData result = parseGraphDataLenient(cleanJson);
 
         // 对节点 ID 加偏移量，避免多块合并时冲突
         if (nodeIdOffset > 0) {
@@ -248,6 +271,205 @@ public class AiClient {
             return text.substring(start, end + 1);
         }
         return text.trim();
+    }
+
+    /**
+     * 容错解析模型 JSON：跳过 nodes/links/insightCharts 中非对象元素（模型偶发输出 "id" 等字符串会导致直接反序列化失败）。
+     */
+    private GraphData parseGraphDataLenient(String cleanJson) throws Exception {
+        JsonNode root = objectMapper.readTree(cleanJson);
+        if (!root.isObject()) {
+            throw new IllegalStateException("AI 返回内容不是 JSON 对象");
+        }
+
+        List<GraphNodeDto> nodes = new ArrayList<>();
+        JsonNode nodesArr = root.path("nodes");
+        if (nodesArr.isArray()) {
+            int i = 0;
+            for (JsonNode el : nodesArr) {
+                if (!el.isObject()) {
+                    log.warn("跳过非法 nodes[{}]（须为对象，实际为 {}）", i, el.getNodeType());
+                    i++;
+                    continue;
+                }
+                String id = textField(el, "id");
+                String name = textField(el, "name");
+                if (id.isEmpty() || name.isEmpty()) {
+                    log.warn("跳过缺少 id 或 name 的 nodes[{}]", i);
+                    i++;
+                    continue;
+                }
+                String type = textField(el, "type");
+                if (type.isEmpty()) {
+                    type = "concept";
+                }
+                nodes.add(new GraphNodeDto(id, name, type, textField(el, "description")));
+                i++;
+            }
+        }
+
+        List<GraphLinkDto> links = new ArrayList<>();
+        JsonNode linksArr = root.path("links");
+        if (linksArr.isArray()) {
+            int i = 0;
+            for (JsonNode el : linksArr) {
+                if (!el.isObject()) {
+                    log.warn("跳过非法 links[{}]（须为对象）", i);
+                    i++;
+                    continue;
+                }
+                String source = textField(el, "source");
+                String target = textField(el, "target");
+                if (source.isEmpty() || target.isEmpty()) {
+                    i++;
+                    continue;
+                }
+                links.add(new GraphLinkDto(source, target, textField(el, "relationship")));
+                i++;
+            }
+        }
+
+        List<InsightChartSpecDto> insightCharts = new ArrayList<>();
+        JsonNode chartsArr = root.path("insightCharts");
+        if (chartsArr.isArray()) {
+            int i = 0;
+            for (JsonNode el : chartsArr) {
+                if (!el.isObject()) {
+                    log.warn("跳过非法 insightCharts[{}]（须为对象）", i);
+                    i++;
+                    continue;
+                }
+                InsightChartSpecDto chart = parseInsightChartObject(el);
+                if (chart != null) {
+                    insightCharts.add(chart);
+                }
+                i++;
+            }
+        }
+
+        return new GraphData(nodes, links, insightCharts);
+    }
+
+    private static String textField(JsonNode obj, String key) {
+        JsonNode v = obj.get(key);
+        if (v == null || v.isNull()) {
+            return "";
+        }
+        if (v.isTextual()) {
+            return v.asText().trim();
+        }
+        if (v.isNumber() || v.isBoolean()) {
+            return v.asText();
+        }
+        return "";
+    }
+
+    private InsightChartSpecDto parseInsightChartObject(JsonNode el) {
+        String id = textField(el, "id");
+        String title = textField(el, "title");
+        if (id.isEmpty() || title.isEmpty()) {
+            return null;
+        }
+        return new InsightChartSpecDto(
+            id,
+            title,
+            textField(el, "rationale"),
+            textField(el, "chartType"),
+            parseStringList(el.get("categories")),
+            parseSeriesList(el.get("series")),
+            parseScatterPoints(el.get("scatterPoints"))
+        );
+    }
+
+    private List<String> parseStringList(JsonNode arr) {
+        if (arr == null || !arr.isArray()) {
+            return Collections.emptyList();
+        }
+        List<String> out = new ArrayList<>();
+        for (JsonNode x : arr) {
+            if (x.isTextual()) {
+                out.add(x.asText());
+            } else if (x.isNumber()) {
+                out.add(x.asText());
+            }
+        }
+        return out;
+    }
+
+    private List<InsightSeriesDto> parseSeriesList(JsonNode arr) {
+        if (arr == null || !arr.isArray()) {
+            return Collections.emptyList();
+        }
+        List<InsightSeriesDto> out = new ArrayList<>();
+        for (JsonNode o : arr) {
+            if (!o.isObject()) {
+                continue;
+            }
+            String name = textField(o, "name");
+            List<Double> data = parseDoubleList(o.get("data"));
+            if (name.isEmpty() || data.isEmpty()) {
+                continue;
+            }
+            out.add(new InsightSeriesDto(name, data));
+        }
+        return out;
+    }
+
+    private List<Double> parseDoubleList(JsonNode arr) {
+        if (arr == null || !arr.isArray()) {
+            return Collections.emptyList();
+        }
+        List<Double> out = new ArrayList<>();
+        for (JsonNode x : arr) {
+            if (x.isNumber()) {
+                out.add(x.asDouble());
+            } else if (x.isTextual()) {
+                try {
+                    out.add(Double.parseDouble(x.asText().trim()));
+                } catch (NumberFormatException ignored) {
+                    // skip
+                }
+            }
+        }
+        return out;
+    }
+
+    private List<List<Double>> parseScatterPoints(JsonNode arr) {
+        if (arr == null || !arr.isArray()) {
+            return Collections.emptyList();
+        }
+        List<List<Double>> out = new ArrayList<>();
+        for (JsonNode row : arr) {
+            if (!row.isArray() || row.size() < 2) {
+                continue;
+            }
+            Double x = readDoubleCell(row.get(0));
+            Double y = readDoubleCell(row.get(1));
+            if (x != null && y != null) {
+                List<Double> pair = new ArrayList<>(2);
+                pair.add(x);
+                pair.add(y);
+                out.add(pair);
+            }
+        }
+        return out;
+    }
+
+    private static Double readDoubleCell(JsonNode x) {
+        if (x == null || x.isNull()) {
+            return null;
+        }
+        if (x.isNumber()) {
+            return x.asDouble();
+        }
+        if (x.isTextual()) {
+            try {
+                return Double.parseDouble(x.asText().trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private void rewriteIds(GraphData data, int offset) {
@@ -302,5 +524,23 @@ public class AiClient {
     private void deduplicateNodes(List<GraphNodeDto> nodes) {
         Set<String> seen = new LinkedHashSet<>();
         nodes.removeIf(n -> !seen.add(n.getName().toLowerCase()));
+    }
+
+    /** 多块合并时保证 insightCharts 的 id 全局唯一 */
+    private void assignUniqueInsightChartIds(List<InsightChartSpecDto> charts) {
+        Set<String> used = new HashSet<>();
+        int seq = 1;
+        for (InsightChartSpecDto c : charts) {
+            String id = c.getId();
+            if (id == null || id.isBlank() || used.contains(id)) {
+                String candidate;
+                do {
+                    candidate = "chart_" + seq++;
+                } while (used.contains(candidate));
+                c.setId(candidate);
+                id = candidate;
+            }
+            used.add(id);
+        }
     }
 }

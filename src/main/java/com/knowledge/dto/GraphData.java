@@ -12,4 +12,6 @@ import java.util.List;
 public class GraphData {
     private List<GraphNodeDto> nodes;
     private List<GraphLinkDto> links;
+    /** 文档语义驱动的多视角图表（可为空；旧数据兼容） */
+    private List<InsightChartSpecDto> insightCharts;
 }

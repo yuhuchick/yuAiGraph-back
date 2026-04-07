@@ -24,4 +24,8 @@ public class Note {
 
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    /** AI 生成的多视角图表 JSON 数组（InsightChartSpecDto[]） */
+    @Column(name = "insights_json", columnDefinition = "LONGTEXT")
+    private String insightsJson;
 }
