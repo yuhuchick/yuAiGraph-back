@@ -36,16 +36,9 @@ public class AiService {
     private final NoteRepository noteRepository;
     private final GraphNodeRepository graphNodeRepository;
     private final ParseJobRepository parseJobRepository;
+    private final PromptConfigService promptConfigService;
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-
-    private static final String CHAT_SYSTEM_TEMPLATE = """
-        你是一个知识图谱问答助手。以下是用户的知识图谱内容：
-        
-        %s
-        
-        请根据以上图谱中的实体和关系回答用户的问题。
-        回答要简洁清晰，优先引用图谱中的实体和关系，如有必要可适当补充相关知识。""";
 
     // ─── 异步解析 ─────────────────────────────────────────────────
 
@@ -143,7 +136,8 @@ public class AiService {
             ParseJob jobRef = parseJobRepository.findById(jobId).orElse(null);
             String noteCategory = jobRef != null && jobRef.getNoteCategory() != null ? jobRef.getNoteCategory() : "";
 
-            GraphData graphData = aiClient.extractGraphData(text, () -> isParseJobCancelled(jobId));
+            String extractPromptTemplate = promptConfigService.getPrompt(PromptConfigService.KEY_GRAPH_EXTRACT);
+            GraphData graphData = aiClient.extractGraphData(text, () -> isParseJobCancelled(jobId), extractPromptTemplate);
 
             if (graphData.getNodes() == null || graphData.getNodes().isEmpty()) {
                 if (isParseJobCancelled(jobId)) {
@@ -243,7 +237,8 @@ public class AiService {
         executor.submit(() -> {
             try {
                 String graphContext = buildGraphContext(noteId);
-                String systemPrompt = String.format(CHAT_SYSTEM_TEMPLATE, graphContext);
+                String systemPromptTemplate = promptConfigService.getPrompt(PromptConfigService.KEY_CHAT_SYSTEM);
+                String systemPrompt = String.format(systemPromptTemplate, graphContext);
                 aiClient.streamChat(systemPrompt, question, emitter);
             } catch (Exception e) {
                 log.error("AI 问答失败: {}", e.getMessage(), e);

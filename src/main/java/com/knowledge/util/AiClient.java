@@ -45,36 +45,6 @@ public class AiClient {
     @Value("${ai.api.chunk-size:4000}")
     private int chunkSize;
 
-    private static final String EXTRACT_PROMPT_TEMPLATE = """
-        你是一个知识图谱与数据可视化专家，需要从以下文本中同时提取：(A) 实体关系图谱，(B) 文档中可结构化展示的重点（多张小图，勿把所有信息塞进一张图）。
-
-        【图谱 nodes / links】
-        1. 实体分为4类：概念（concept）、人物（person）、事件（event）、物体（object）
-        2. 每个实体：id（本块内从 n1、n2…连续编号）、name、type、description（1-2句话）
-        2a. nodes、links、insightCharts 均为数组；数组中每一项必须是完整的 JSON 对象（含花括号与键值对），禁止出现纯字符串元素（如 "id"、"name"）或残缺片段，否则无法解析。
-        3. 关系：source、target（均为实体 id）、relationship（如「包含」「关联」「因果」「属于」等简短动词短语）
-        4. 图谱与图表中的数值必须能在原文中找到依据；禁止编造与原文无关的数据。
-
-        【语义图表 insightCharts】
-        5. 优先产出能反映文档论点、阶段对比、时间线、TOP 清单、术语与人物要点等「有叙事价值」的图或表；禁止仅为「节点类型占比、关系标签出现次数、节点连接度」等纯图谱结构统计单独建图（系统会以表格展示实体与关系清单）。
-        6. chartType 取值：
-           - pie：文中明确的占比、构成、份额
-           - bar：类别数量对比、排名、多组对比
-           - line：时间序列、阶段变化、趋势
-           - radar：多维度特征/能力对比
-           - scatter：两变量关系，使用 scatterPoints 为 [[x,y],...]，不用 categories+series 承载主数据
-           - table：术语定义表、阶段对照、人物/事件要点罗列、论点与论据清单等；必须提供 tableColumns（表头字符串数组）与 tableRows（二维数组，每行长度与表头列数一致）；table 时可省略或留空 categories、series、scatterPoints
-        7. 每一项含：id（本块内唯一，如 c1）、title、rationale（1句说明对应文中哪类信息）、chartType 及对应数据字段。
-        8. 若本段没有值得单独成图/表的内容，insightCharts 输出 []；禁止为用图谱结构统计凑数。
-
-        输出唯一一个 JSON 对象，键为 nodes、links、insightCharts，不要 markdown 或任何额外文字。
-
-        输出格式示例（字段说明用，勿照抄数值）：
-        {"nodes":[...],"links":[...],"insightCharts":[{"id":"c1","title":"...","rationale":"...","chartType":"bar","categories":["A","B"],"series":[{"name":"数量","data":[1,2]}]},{"id":"c2","title":"术语表","rationale":"...","chartType":"table","tableColumns":["术语","含义"],"tableRows":[["A","定义A"],["B","定义B"]]}]}
-
-        文本内容：\
-        """;
-
     /** 内容太短不值得提取的阈值（字符数） */
     private static final int MIN_CHUNK_LENGTH = 100;
 
@@ -82,13 +52,17 @@ public class AiClient {
      * 从文本中提取实体和关系，超长文本自动分块处理并合并结果
      */
     public GraphData extractGraphData(String text) {
-        return extractGraphData(text, () -> false);
+        return extractGraphData(text, () -> false, "");
     }
 
     /**
      * @param cancelled 在每一块调用 AI 之前检查；返回 true 时中止并抛出 {@link ParseCancelledException}
      */
     public GraphData extractGraphData(String text, BooleanSupplier cancelled) {
+        return extractGraphData(text, cancelled, "");
+    }
+
+    public GraphData extractGraphData(String text, BooleanSupplier cancelled, String extractPromptTemplate) {
         List<String> chunks = splitText(text).stream()
             .filter(c -> c.length() >= MIN_CHUNK_LENGTH)
             .toList();
@@ -111,7 +85,7 @@ public class AiClient {
             String chunk = chunks.get(i);
             log.info("正在处理第 {}/{} 块，长度: {} 字符", i + 1, chunks.size(), chunk.length());
             try {
-                GraphData chunkResult = extractFromChunk(chunk, nodeIdOffset);
+                GraphData chunkResult = extractFromChunk(chunk, nodeIdOffset, extractPromptTemplate);
                 allNodes.addAll(chunkResult.getNodes());
                 allLinks.addAll(chunkResult.getLinks());
                 if (chunkResult.getInsightCharts() != null) {
@@ -222,9 +196,12 @@ public class AiClient {
 
     // ─── private helpers ────────────────────────────────────────────────
 
-    private GraphData extractFromChunk(String chunk, int nodeIdOffset) throws Exception {
+    private GraphData extractFromChunk(String chunk, int nodeIdOffset, String extractPromptTemplate) throws Exception {
         // 用拼接替代 String.format，避免 chunk 中含 % 字符时抛出 FormatException
-        String prompt = EXTRACT_PROMPT_TEMPLATE + chunk;
+        String basePrompt = (extractPromptTemplate == null || extractPromptTemplate.isBlank())
+            ? "请根据文本提取知识图谱，输出 JSON。文本内容：\\"
+            : extractPromptTemplate;
+        String prompt = basePrompt + chunk;
 
         List<Map<String, String>> messages = List.of(
             Map.of("role", "user", "content", prompt)

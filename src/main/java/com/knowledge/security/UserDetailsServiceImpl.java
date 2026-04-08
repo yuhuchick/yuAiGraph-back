@@ -31,10 +31,11 @@ public class UserDetailsServiceImpl implements UserDetailsService {
     }
 
     private UserDetails toUserDetails(User user) {
+        String role = (user.getRole() == null || user.getRole().isBlank()) ? "USER" : user.getRole();
         return new org.springframework.security.core.userdetails.User(
             String.valueOf(user.getId()),
             user.getPassword(),
-            List.of(new SimpleGrantedAuthority("ROLE_USER"))
+            List.of(new SimpleGrantedAuthority("ROLE_" + role))
         );
     }
 }

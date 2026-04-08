@@ -42,6 +42,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/", "/healthz").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/user/register", "/api/v1/user/login").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/share/**").permitAll()
+                .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .anyRequest().authenticated()
             )

@@ -33,6 +33,7 @@ public class UserService {
         user.setUsername(req.getUsername());
         user.setEmail(req.getEmail());
         user.setPassword(passwordEncoder.encode(req.getPassword()));
+        user.setRole("USER");
         userRepository.save(user);
 
         String token = jwtUtil.generateToken(user.getId());
@@ -58,10 +59,12 @@ public class UserService {
     }
 
     private UserInfo toUserInfo(User user) {
+        String role = (user.getRole() == null || user.getRole().isBlank()) ? "USER" : user.getRole();
         return new UserInfo(
             user.getId(),
             user.getUsername(),
             user.getEmail(),
+            role,
             user.getCreatedAt().format(DATE_FMT)
         );
     }
