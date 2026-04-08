@@ -1,6 +1,11 @@
 #!/bin/bash
 # 后端部署脚本 - 在服务器上执行
-# 用法: bash deploy.sh
+# 用法: 在服务器执行 bash /opt/yuAiGraph-back/deploy.sh（路径按你实际 APP_DIR）
+#
+# 支持两种常见目录：
+#   A) 源码与 app.jar、deploy.sh 同在 APP_DIR（你当前这种：/opt/yuAiGraph-back 下有 pom.xml、src）
+#   B) 源码在 APP_DIR/repo，运行目录仍是 APP_DIR
+# 可选在 deploy.env 中设置 GIT_ROOT / MAVEN_DIR 强制指定。
 set -e
 
 ENV_FILE="/opt/deploy/deploy.env"
@@ -19,63 +24,69 @@ JWT_SECRET=$(openssl rand -hex 32)
 APP_BASE_URL=https://yudev.top
 AI_API_KEY=你的AI密钥
 AI_CHAT_MODEL=MiniMax-M2.5
-GIT_REPO_URL=https://你的仓库/ai-back.git
-# GIT_BRANCH=main
+# GIT_ROOT=/opt/yuAiGraph-back/repo
+# MAVEN_DIR=/opt/yuAiGraph-back/repo/yuAiGraph-back
 EOF
 EXAMPLE
     exit 1
 fi
 source "$ENV_FILE"
 
-# 代码目录与分支（在 deploy.env 里可设 REPO_DIR、GIT_BRANCH、GIT_REPO_URL）
-REPO_DIR="${REPO_DIR:-$APP_DIR/repo}"
-GIT_BRANCH="${GIT_BRANCH:-main}"
-
 # 接口访问日志目录（Tomcat access log），默认同应用日志目录
 ACCESS_LOG_DIR="${ACCESS_LOG_DIR:-$LOG_DIR}"
 
 mkdir -p "$APP_DIR" "$LOG_DIR" "$ACCESS_LOG_DIR"
 
-# ── 拉取/更新代码 ──────────────────────────────────────────────
-echo "【后端】同步代码 → $REPO_DIR （分支: $GIT_BRANCH）"
-if [ -d "$REPO_DIR/.git" ]; then
-    git -C "$REPO_DIR" fetch origin --prune
-    git -C "$REPO_DIR" checkout "$GIT_BRANCH"
-    # 与远端完全一致，避免服务器残留合并/本地提交导致“永远不是最新”
-    git -C "$REPO_DIR" reset --hard "origin/$GIT_BRANCH"
-    echo "【后端】当前提交: $(git -C "$REPO_DIR" log -1 --oneline)"
-elif [ "${USE_LOCAL_REPO:-0}" = "1" ]; then
-    # 仅本机调试：在仓库根目录执行 bash deploy.sh，且 deploy.env 设 USE_LOCAL_REPO=1
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if [ ! -f "$SCRIPT_DIR/pom.xml" ]; then
-        echo "❌ USE_LOCAL_REPO=1 时请在含 pom.xml 的仓库根目录执行 deploy.sh"
-        exit 1
+# ── 确定 GIT 根目录与 Maven 工程目录 ───────────────────────────
+GIT_ROOT="${GIT_ROOT:-}"
+MAVEN_DIR="${MAVEN_DIR:-}"
+
+if [ -z "$GIT_ROOT" ]; then
+    if [ -d "$APP_DIR/.git" ]; then
+        GIT_ROOT="$APP_DIR"
+    elif [ -d "$APP_DIR/repo/.git" ]; then
+        GIT_ROOT="$APP_DIR/repo"
     fi
-    REPO_DIR="$SCRIPT_DIR"
-    echo "【后端】使用本地仓库（不拉取远程）: $REPO_DIR"
-    echo "【后端】当前提交: $(git -C "$REPO_DIR" log -1 --oneline 2>/dev/null || echo '非 git 目录')"
-else
-    if [ -z "${GIT_REPO_URL:-}" ]; then
-        echo "❌ 目录 $REPO_DIR 不是 git 仓库，且未配置 GIT_REPO_URL。"
-        echo "   请任选其一："
-        echo "   1) 在 $ENV_FILE 中设置 GIT_REPO_URL=... ，重新执行本脚本（将自动 clone）；"
-        echo "   2) 手动执行: git clone -b $GIT_BRANCH <url> $REPO_DIR"
-        echo "   3) 本机联调: USE_LOCAL_REPO=1 且在仓库根目录执行"
-        exit 1
-    fi
-    mkdir -p "$(dirname "$REPO_DIR")"
-    if [ -d "$REPO_DIR" ] && [ ! -d "$REPO_DIR/.git" ]; then
-        echo "❌ $REPO_DIR 已存在但不是 git 仓库，请备份后删除该目录再部署"
-        exit 1
-    fi
-    # 全量 clone，避免 shallow 在部分环境下 fetch/reset 异常
-    git clone -b "$GIT_BRANCH" "$GIT_REPO_URL" "$REPO_DIR"
-    echo "【后端】已克隆，当前提交: $(git -C "$REPO_DIR" log -1 --oneline)"
 fi
+
+if [ -z "$MAVEN_DIR" ]; then
+    if [ -n "$GIT_ROOT" ] && [ -f "$GIT_ROOT/pom.xml" ]; then
+        MAVEN_DIR="$GIT_ROOT"
+    elif [ -n "$GIT_ROOT" ] && [ -f "$GIT_ROOT/yuAiGraph-back/pom.xml" ]; then
+        MAVEN_DIR="$GIT_ROOT/yuAiGraph-back"
+    elif [ -f "$APP_DIR/pom.xml" ]; then
+        MAVEN_DIR="$APP_DIR"
+    else
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [ -f "$SCRIPT_DIR/pom.xml" ]; then
+            MAVEN_DIR="$SCRIPT_DIR"
+            if [ -z "$GIT_ROOT" ]; then
+                if [ -d "$SCRIPT_DIR/.git" ]; then
+                    GIT_ROOT="$SCRIPT_DIR"
+                elif [ -d "$SCRIPT_DIR/../.git" ]; then
+                    GIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+                fi
+            fi
+        else
+            echo "❌ 找不到 pom.xml。请在 $APP_DIR 或 GIT_ROOT 下包含 Maven 工程，或在 $ENV_FILE 设置 MAVEN_DIR"
+            exit 1
+        fi
+    fi
+fi
+
+# ── 拉取/更新代码 ──────────────────────────────────────────────
+echo "【后端】拉取最新代码..."
+if [ -n "$GIT_ROOT" ] && [ -d "$GIT_ROOT/.git" ]; then
+    git -C "$GIT_ROOT" pull
+    echo "【后端】Git 目录: $GIT_ROOT"
+else
+    echo "⚠️ 未检测到 .git（跳过 git pull），仅本地 mvn package"
+fi
+echo "【后端】Maven 目录: $MAVEN_DIR"
 
 # ── Maven 打包 ─────────────────────────────────────────────────
 echo "【后端】Maven 打包中..."
-cd "$REPO_DIR"
+cd "$MAVEN_DIR"
 mvn package -DskipTests -q
 cp target/*.jar "$APP_DIR/app.jar"
 echo "【后端】打包完成：$(ls -lh $APP_DIR/app.jar | awk '{print $5}')"
