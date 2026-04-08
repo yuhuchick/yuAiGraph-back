@@ -36,6 +36,16 @@ server:
     threads:
       max: 50
       min-spare: 5
+    # 每条 HTTP 请求一行（类似 Nginx access）；文件在 ACCESS_LOG_DIR 或 ./logs
+    accesslog:
+      enabled: true
+      directory: ${ACCESS_LOG_DIR:logs}
+      prefix: access
+      suffix: .log
+      rotate: true
+      buffered: false
+      # %h IP  %u 用户(多为 -)  %t 时间  %r 请求行  %s 状态码  %b 响应字节  %T 处理耗时(秒，含流式直到连接结束)
+      pattern: '%h %l %u %t "%r" %s %b %T'
 
 ai:
   api:

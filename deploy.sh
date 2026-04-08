@@ -26,7 +26,10 @@ EXAMPLE
 fi
 source "$ENV_FILE"
 
-mkdir -p "$APP_DIR" "$LOG_DIR"
+# 接口访问日志目录（Tomcat access log），默认同应用日志目录
+ACCESS_LOG_DIR="${ACCESS_LOG_DIR:-$LOG_DIR}"
+
+mkdir -p "$APP_DIR" "$LOG_DIR" "$ACCESS_LOG_DIR"
 
 # ── 拉取/更新代码 ──────────────────────────────────────────────
 echo "【后端】拉取最新代码..."
@@ -59,6 +62,7 @@ JWT_SECRET="${JWT_SECRET}"
 APP_BASE_URL="${APP_BASE_URL}"
 AI_API_KEY="${AI_API_KEY}"
 AI_CHAT_MODEL="${AI_CHAT_MODEL}"
+ACCESS_LOG_DIR="${ACCESS_LOG_DIR}"
 BACKENV
 
 # ── 注册 systemd 服务 ──────────────────────────────────────────
@@ -90,7 +94,8 @@ echo "【后端】等待启动..."
 sleep 6
 if systemctl is-active --quiet yuAiGraph-back; then
     echo "【后端】✅ 启动成功"
-    echo "        日志: tail -f $LOG_DIR/app.log"
+    echo "        应用日志: tail -f $LOG_DIR/app.log"
+    echo "        接口日志: tail -f $ACCESS_LOG_DIR/access*.log"
 else
     echo "【后端】❌ 启动失败，最近日志："
     journalctl -u yuAiGraph-back -n 30 --no-pager
