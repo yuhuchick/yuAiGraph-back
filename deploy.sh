@@ -1,16 +1,12 @@
 #!/bin/bash
 # 后端部署脚本 - 在服务器上执行
-# 用法: 在服务器执行 bash /opt/yuAiGraph-back/deploy.sh（路径按你实际 APP_DIR）
-#
-# 支持两种常见目录：
-#   A) 源码与 app.jar、deploy.sh 同在 APP_DIR（你当前这种：/opt/yuAiGraph-back 下有 pom.xml、src）
-#   B) 源码在 APP_DIR/repo，运行目录仍是 APP_DIR
-# 可选在 deploy.env 中设置 GIT_ROOT / MAVEN_DIR 强制指定。
+# 用法: bash deploy.sh
 set -e
 
 ENV_FILE="/opt/deploy/deploy.env"
 APP_DIR="/opt/yuAiGraph-back"
 LOG_DIR="/var/log/yuAiGraph-back"
+REPO_DIR="$APP_DIR/repo"
 
 # ── 检查配置文件 ───────────────────────────────────────────────
 if [ ! -f "$ENV_FILE" ]; then
@@ -24,8 +20,6 @@ JWT_SECRET=$(openssl rand -hex 32)
 APP_BASE_URL=https://yudev.top
 AI_API_KEY=你的AI密钥
 AI_CHAT_MODEL=MiniMax-M2.5
-# GIT_ROOT=/opt/yuAiGraph-back/repo
-# MAVEN_DIR=/opt/yuAiGraph-back/repo/yuAiGraph-back
 EOF
 EXAMPLE
     exit 1
@@ -37,56 +31,24 @@ ACCESS_LOG_DIR="${ACCESS_LOG_DIR:-$LOG_DIR}"
 
 mkdir -p "$APP_DIR" "$LOG_DIR" "$ACCESS_LOG_DIR"
 
-# ── 确定 GIT 根目录与 Maven 工程目录 ───────────────────────────
-GIT_ROOT="${GIT_ROOT:-}"
-MAVEN_DIR="${MAVEN_DIR:-}"
-
-if [ -z "$GIT_ROOT" ]; then
-    if [ -d "$APP_DIR/.git" ]; then
-        GIT_ROOT="$APP_DIR"
-    elif [ -d "$APP_DIR/repo/.git" ]; then
-        GIT_ROOT="$APP_DIR/repo"
-    fi
-fi
-
-if [ -z "$MAVEN_DIR" ]; then
-    if [ -n "$GIT_ROOT" ] && [ -f "$GIT_ROOT/pom.xml" ]; then
-        MAVEN_DIR="$GIT_ROOT"
-    elif [ -n "$GIT_ROOT" ] && [ -f "$GIT_ROOT/yuAiGraph-back/pom.xml" ]; then
-        MAVEN_DIR="$GIT_ROOT/yuAiGraph-back"
-    elif [ -f "$APP_DIR/pom.xml" ]; then
-        MAVEN_DIR="$APP_DIR"
-    else
-        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        if [ -f "$SCRIPT_DIR/pom.xml" ]; then
-            MAVEN_DIR="$SCRIPT_DIR"
-            if [ -z "$GIT_ROOT" ]; then
-                if [ -d "$SCRIPT_DIR/.git" ]; then
-                    GIT_ROOT="$SCRIPT_DIR"
-                elif [ -d "$SCRIPT_DIR/../.git" ]; then
-                    GIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-                fi
-            fi
-        else
-            echo "❌ 找不到 pom.xml。请在 $APP_DIR 或 GIT_ROOT 下包含 Maven 工程，或在 $ENV_FILE 设置 MAVEN_DIR"
-            exit 1
-        fi
-    fi
-fi
-
 # ── 拉取/更新代码 ──────────────────────────────────────────────
 echo "【后端】拉取最新代码..."
-if [ -n "$GIT_ROOT" ] && [ -d "$GIT_ROOT/.git" ]; then
-    git -C "$GIT_ROOT" pull
-    echo "【后端】Git 目录: $GIT_ROOT"
+if [ -d "$REPO_DIR/.git" ]; then
+    git -C "$REPO_DIR" pull
 else
-    echo "⚠️ 未检测到 .git（跳过 git pull），仅本地 mvn package"
+    # 首次部署：把当前目录作为源（脚本在仓库内运行）
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$SCRIPT_DIR/pom.xml" ]; then
+        REPO_DIR="$SCRIPT_DIR"
+    else
+        echo "❌ 找不到 pom.xml，请在仓库根目录执行此脚本"
+        exit 1
+    fi
 fi
-echo "【后端】Maven 目录: $MAVEN_DIR"
 
 # ── Maven 打包 ─────────────────────────────────────────────────
 echo "【后端】Maven 打包中..."
-cd "$MAVEN_DIR"
+cd "$REPO_DIR"
 mvn package -DskipTests -q
 cp target/*.jar "$APP_DIR/app.jar"
 echo "【后端】打包完成：$(ls -lh $APP_DIR/app.jar | awk '{print $5}')"
